@@ -29,8 +29,12 @@ jobs:
             [ -d "$GITHUB_WORKSPACE/$dir" ] || continue
             rm -rf "$HOME/proj"
             cp -R "$GITHUB_WORKSPACE/$dir" "$HOME/proj"
-            (cd "$HOME/proj" && gmake package FINALPACKAGE=1)
-            cp "$HOME/proj"/packages/*.deb "$GITHUB_WORKSPACE/out/"
+            cd "$HOME/proj"
+            # не считать устаревшие API ошибкой (на сборку не влияет)
+            find . -name Makefile -exec perl -pi -e 's/^(\w+_CFLAGS\s*=.*)$/$1 -Wno-deprecated-declarations/' {} +
+            gmake package FINALPACKAGE=1
+            cp packages/*.deb "$GITHUB_WORKSPACE/out/"
+            cd "$GITHUB_WORKSPACE"
           done
 
       - uses: actions/upload-artifact@v4
