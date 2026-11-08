@@ -9,6 +9,6 @@ TWEAK_NAME = QuickCloseAll
 
 QuickCloseAll_FILES = Tweak.x
 QuickCloseAll_FRAMEWORKS = UIKit QuartzCore
-QuickCloseAll_CFLAGS = -fobjc-arc
+QuickCloseAll_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 
 include $(THEOS_MAKE_PATH)/tweak.mk

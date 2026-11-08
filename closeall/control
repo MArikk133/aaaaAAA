@@ -1,6 +1,6 @@
 Package: com.vibecoder.quickcloseall
 Name: QuickCloseAll
-Version: 0.1.0
+Version: 0.2.0
 Architecture: iphoneos-arm
 Description: Adds a Close All button to the app switcher
 Maintainer: you

@@ -18,29 +18,76 @@
 
 enum { kButtonTag = 0x0C10A11 };
 
-static BOOL gSwitcherKnown = NO;    // получали ли мы сигнал о показе/скрытии переключателя
-static BOOL gSwitcherVisible = NO;
 static __weak SBFluidSwitcherViewController *gVC;
 static NSTimer *gTimer;
 
-#pragma mark - Видимость
+#pragma mark - Определяем, открыт ли переключатель
 
-// Реально ли вью видно на экране: в окне, не скрыто и не прозрачно по всей цепочке.
-static BOOL ViewReallyVisible(UIView *v) {
-    if (!v.window) return NO;
-    if (v.window.hidden || v.window.alpha < 0.05) return NO;
-    for (UIView *x = v; x; x = x.superview) {
-        if (x.hidden || x.alpha < 0.05) return NO;
+// Карточки переключателя. Когда вы внутри приложения или на домашнем экране,
+// «карточка» занимает весь экран (масштаб 1). В переключателе все карточки
+// уменьшены (масштаб около 0.5-0.7). По этому и узнаём, открыт ли переключатель.
+
+static void ScanContainers(UIView *v, NSMutableArray *out, int depth) {
+    if (depth > 5) return;
+    for (UIView *s in v.subviews) {
+        if ([NSStringFromClass([s class]) containsString:@"ItemContainer"]) {
+            [out addObject:s];
+            continue;
+        }
+        ScanContainers(s, out, depth + 1);
     }
-    return YES;
 }
 
-static BOOL ShouldShowButton(SBFluidSwitcherViewController *vc) {
-    if (!vc.isViewLoaded || !ViewReallyVisible(vc.view)) return NO;
-    if (gSwitcherKnown && !gSwitcherVisible) return NO;
-    if (![vc respondsToSelector:@selector(appLayouts)]) return NO;
-    NSArray *layouts = vc.appLayouts;
-    return [layouts isKindOfClass:[NSArray class]] && layouts.count > 0;
+static NSArray<UIView *> *SwitcherContainers(SBFluidSwitcherViewController *vc) {
+    NSMutableArray<UIView *> *out = [NSMutableArray array];
+
+    if ([vc respondsToSelector:@selector(appLayouts)] &&
+        [vc respondsToSelector:@selector(_itemContainerForAppLayoutIfExists:)]) {
+        NSArray *layouts = [vc.appLayouts copy];
+        if ([layouts isKindOfClass:[NSArray class]]) {
+            for (id layout in layouts) {
+                id c = [vc _itemContainerForAppLayoutIfExists:layout];
+                if ([c isKindOfClass:[UIView class]]) [out addObject:c];
+            }
+        }
+    }
+
+    // Запасной путь: ищем карточки по имени класса.
+    if (out.count == 0 && vc.isViewLoaded) {
+        ScanContainers(vc.view, out, 0);
+    }
+    return out;
+}
+
+// Возвращает 0...1: насколько «открыт» переключатель (0 = закрыт, 1 = открыт).
+static CGFloat SwitcherAmount(SBFluidSwitcherViewController *vc) {
+    if (!vc.isViewLoaded) return 0;
+    UIWindow *w = vc.view.window;
+    if (!w || w.hidden || w.alpha < 0.05) return 0;
+
+    CGRect screen = w.bounds;
+    CGFloat screenArea = screen.size.width * screen.size.height;
+    if (screenArea <= 0) return 0;
+
+    CGFloat maxRatio = -1;
+    for (UIView *c in SwitcherContainers(vc)) {
+        if (!c.window) continue;
+
+        BOOL hiddenInChain = NO;
+        for (UIView *x = c; x; x = x.superview) {
+            if (x.hidden || x.alpha < 0.05) { hiddenInChain = YES; break; }
+        }
+        if (hiddenInChain) continue;
+
+        CGRect r = [c convertRect:c.bounds toView:nil];
+        CGRect inter = CGRectIntersection(r, screen);
+        if (CGRectIsNull(inter) || inter.size.width * inter.size.height < 0.15 * screenArea) continue;
+
+        maxRatio = MAX(maxRatio, r.size.width / screen.size.width);
+    }
+
+    if (maxRatio < 0) return 0;                        // карточек на экране нет
+    return MAX(0, MIN(1, (0.92 - maxRatio) / 0.2));    // 0.92 и выше = внутри приложения
 }
 
 #pragma mark - Кнопка
@@ -90,20 +137,16 @@ static void QCAUpdate(SBFluidSwitcherViewController *vc) {
         [host bringSubviewToFront:b];
     }
 
-    BOOL show = ShouldShowButton(vc);
-    if (show && b.hidden) {
-        b.hidden = NO;
-        [UIView animateWithDuration:0.2 animations:^{ b.alpha = 1.0; }];
-    } else if (!show && !b.hidden) {
-        b.alpha = 0.0;
-        b.hidden = YES;
-    }
+    // Кнопка плавно появляется, пока карточки уменьшаются, и исчезает, когда приложение открывается.
+    CGFloat amount = SwitcherAmount(vc);
+    b.hidden = amount < 0.02;
+    b.alpha = amount;
+    b.userInteractionEnabled = amount > 0.6;
 }
 
 static void StartTimer(void) {
     if (gTimer) return;
-    // Лёгкая проверка 4 раза в секунду: показать или спрятать кнопку.
-    gTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
+    gTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *t) {
         SBFluidSwitcherViewController *vc = gVC;
         if (!vc) {
             [t invalidate];
@@ -161,23 +204,6 @@ static void StartTimer(void) {
             if (container) [self killContainer:container forReason:0];
         }
     }
-}
-
-%end
-
-// Сигналы о показе и скрытии переключателя (если контроллер их присылает).
-%hook SBMainSwitcherViewController
-
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    gSwitcherKnown = YES;
-    gSwitcherVisible = YES;
-}
-
-- (void)viewDidDisappear:(BOOL)animated {
-    %orig;
-    gSwitcherKnown = YES;
-    gSwitcherVisible = NO;
 }
 
 %end
