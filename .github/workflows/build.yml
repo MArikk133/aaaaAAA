@@ -1,0 +1,39 @@
+name: Build tweaks
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install ldid dpkg make
+
+      - name: Install Theos
+        run: |
+          git clone --recursive --depth=1 https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Install SDKs
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks.git "$HOME/sdks-tmp"
+          mkdir -p "$HOME/theos/sdks"
+          cp -R "$HOME/sdks-tmp/"*.sdk "$HOME/theos/sdks/"
+
+      - name: Build tweaks
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          for dir in "batterycolor-project 2" "icontint" "closeall"; do
+            [ -d "$GITHUB_WORKSPACE/$dir" ] || continue
+            rm -rf "$HOME/proj"
+            cp -R "$GITHUB_WORKSPACE/$dir" "$HOME/proj"
+            (cd "$HOME/proj" && gmake package FINALPACKAGE=1)
+            cp "$HOME/proj"/packages/*.deb "$GITHUB_WORKSPACE/out/"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debs
+          path: out/*.deb
